@@ -37,7 +37,7 @@ class StockDataPipeline:
         # Split into training (70%) and current (30%) data
         split_idx = int(len(data_scaled) * self.split_ratio)
         self.X_train, self.X_test = self._create_sequences(data_scaled[:split_idx]), self._create_sequences(data_scaled[split_idx:])
-        self.open_reference = open_data[split_idx:]
+        self.open_reference = open_data[:split_idx]
         self.open_current = open_data[split_idx:]   
         
     def _create_sequences(self, data):
@@ -71,8 +71,8 @@ class ConceptDriftDetector:
         self.target_drift_detector = ChiSquareTest()  # Initialize without threshold
         self.drift_detected = False
         self.drift_point = None
-        self.target_drift_threshold = 0.05  
-        self.feature_drift_threshold = 0.05
+        self.target_drift_threshold = target_drift_threshold  
+        self.feature_drift_threshold = feature_drift_threshold
         
     def detect_drift(self, y_true, y_pred):
         """Update the drift detector with new prediction errors."""
@@ -96,8 +96,8 @@ class ConceptDriftDetector:
     def detect_target_drift(self, y_train, y_test):
         """Detect target drift using ChiSquareTest."""
         drift_flag = False
-        y_train = np.array(y_train)
-        y_test = np.array(y_test)
+        y_train = np.array(y_train).flatten()  # Ensure 1-dimensional array
+        y_test = np.array(y_test).flatten()  # Ensure 1-dimensional array
         self.target_drift_detector.fit(X=y_train)
         drift_detected = self.target_drift_detector.compare(X=y_test)[0]
         if drift_detected.p_value < self.target_drift_threshold and not drift_flag:
@@ -211,14 +211,12 @@ def main(cfg: DictConfig):
     # Run the stream processor for drift detection
     stream_processor = StreamProcessor(pipeline, detector)
     stream_processor.run(X_current)
-    detector.detect_feature_drift(pipeline.open_reference, pipeline.open_current)
-
     
     # Perform feature drift detection
-    # detector.detect_feature_drift(pipeline.X_train, pipeline.X_test)
+    detector.detect_feature_drift(pipeline.open_reference, pipeline.open_current)
     
     # Perform target drift detection
-    # detector.detect_target_drift(pipeline.X_train[:, -1], pipeline.X_test[:, -1])
+    detector.detect_target_drift(pipeline.X_train[:, -1], pipeline.X_test[:, -1])
 
 if __name__ == "__main__":
     main()
