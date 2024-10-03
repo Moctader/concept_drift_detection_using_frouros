@@ -1,11 +1,16 @@
-import numpy as np
-import yfinance as yf
+import hydra
+from omegaconf import DictConfig, OmegaConf
 from sklearn.preprocessing import StandardScaler
 from keras.models import Sequential
 from keras.layers import LSTM, Dense
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from frouros.detectors.data_drift import KSTest, ChiSquareTest  
 from frouros.detectors.concept_drift import DDM, DDMConfig
+
+import yfinance as yf
+import numpy as np
 import matplotlib.pyplot as plt
+import importlib
 
 class StockDataPipeline:
     def __init__(self, stock_symbol, split_ratio=0.7, sequence_length=50):
@@ -38,13 +43,13 @@ class StockDataPipeline:
             X.append(data[i-self.sequence_length:i, 0])
         return np.array(X).reshape(-1, self.sequence_length, 1)
     
-    def build_lstm_model(self):
+    def build_lstm_model(self, layers):
         """Build the LSTM model."""
-        self.model = Sequential([
-            LSTM(units=50, return_sequences=True, input_shape=(self.sequence_length, 1)),
-            LSTM(units=50),
-            Dense(1)
-        ])
+        self.model = Sequential()
+        for layer in layers:
+            layer_name, layer_params = list(layer.items())[0]
+            layer_class = getattr(importlib.import_module('keras.layers'), layer_name)
+            self.model.add(layer_class(**layer_params))
         self.model.compile(optimizer='adam', loss='mean_squared_error')
     
     def train(self, epochs=10, batch_size=32):
@@ -56,27 +61,53 @@ class StockDataPipeline:
         return self.model.predict(X)
 
 class ConceptDriftDetector:
-    def __init__(self, warning_level=1.0, drift_level=2.0, min_num_instances=25):
-        config = DDMConfig(warning_level=warning_level, drift_level=drift_level, min_num_instances=min_num_instances)
-        self.detector = DDM(config=config)
+    def __init__(self, warning_level=1.0, drift_level=2.0, min_num_instances=25, feature_drift_threshold=0.05, target_drift_threshold=0.05):
+        self.detector = DDM()  # Initialize DDM without config
+        self.feature_drift_detector = KSTest()  # Initialize without threshold
+        self.target_drift_detector = ChiSquareTest()  # Initialize without threshold
         self.drift_detected = False
         self.drift_point = None
+        self.target_drift_threshold = 0.05  
         
     def detect_drift(self, y_true, y_pred):
         """Update the drift detector with new prediction errors."""
         error = mean_squared_error([y_true], [y_pred])
         self.detector.update(value=error)
-        if self.detector.status["drift"]:
+        if self.detector.drift_state:
             self.drift_detected = True
             print("Concept drift detected!")
         return error
+
+    def detect_feature_drift(self, X_train, X_test):
+        """Detect feature drift using KSTest."""
+        drift_flag = False
+        for i in range(X_train.shape[1]):
+            self.feature_drift_detector.fit(X_train[:, i])
+            drift_detected = self.feature_drift_detector.test(X_test[:, i])
+            if drift_detected and not drift_flag:
+                drift_flag = True
+                print(f"Feature {i} drift detected: {drift_detected}")
+
+    def detect_target_drift(self, y_train, y_test):
+        """Detect target drift using ChiSquareTest."""
+        drift_flag = False
+        y_train = np.array(y_train)
+        y_test = np.array(y_test)
+        self.target_drift_detector.fit(X=y_train)
+        drift_detected = self.target_drift_detector.compare(X=y_test)[0]
+        if drift_detected.p_value < self.target_drift_threshold and not drift_flag:
+            drift_flag = True
+            print(f"Target drift detected: {drift_detected}")
+        else:
+            print(f"No target drift detected")
+
 
     def stream_test(self, X_current, pipeline):
         """Simulate data stream over X_current."""
         drift_flag = False
         y_true_list = []
         y_pred_list = []
-        
+
         for i, X in enumerate(X_current):
             y_true = X[-1, 0]  # The true value is the last value in the sequence
             y_pred = pipeline.predict(X.reshape(1, -1, 1)).item()
@@ -92,6 +123,9 @@ class ConceptDriftDetector:
         
         if not drift_flag:
             print("No concept drift detected")
+
+        self.detect_target_drift(y_true_list, y_pred_list)
+
         
         # Calculate regression metrics
         mse = mean_squared_error(y_true_list, y_pred_list)
@@ -102,7 +136,6 @@ class ConceptDriftDetector:
         print(f"Final Mean Absolute Error (MAE): {mae:.4f}")
         print(f"Final R^2 Score: {r2:.4f}")
         
-        # Plot the results
         # Plot the results
         fig, axs = plt.subplots(3, 1, figsize=(14, 15))
 
@@ -145,20 +178,41 @@ class StreamProcessor:
         """Run the stream test for concept drift detection."""
         self.detector.stream_test(X_current, self.pipeline)
 
-# Example usage
-if __name__ == "__main__":
+@hydra.main(version_base=None, config_path=".", config_name="config")
+def main(cfg: DictConfig):
+    print(OmegaConf.to_yaml(cfg))
+    
     # Create and train the pipeline
-    pipeline = StockDataPipeline(stock_symbol="AAPL")
+    pipeline = StockDataPipeline(
+        stock_symbol=cfg.pipeline.stock_symbol,
+        split_ratio=cfg.pipeline.split_ratio,
+        sequence_length=cfg.pipeline.sequence_length
+    )
     pipeline.fetch_data()
-    pipeline.build_lstm_model()
-    pipeline.train(epochs=5)
+    pipeline.build_lstm_model(cfg.pipeline.lstm_model.layers)
+    pipeline.train(epochs=cfg.pipeline.train.epochs, batch_size=cfg.pipeline.train.batch_size)
     
     # Create a drift detector
-    detector = ConceptDriftDetector()
+    detector = ConceptDriftDetector(
+        warning_level=cfg.drift_detection.warning_level,
+        drift_level=cfg.drift_detection.drift_level,
+        min_num_instances=cfg.drift_detection.min_num_instances,
+        feature_drift_threshold=cfg.drift_detection.feature_drift.threshold,
+        target_drift_threshold=cfg.drift_detection.target_drift.threshold
+    )
     
     # Get the current data
     X_current = pipeline.X_test
-        
+    
     # Run the stream processor for drift detection
     stream_processor = StreamProcessor(pipeline, detector)
     stream_processor.run(X_current)
+    
+    # Perform feature drift detection
+    # detector.detect_feature_drift(pipeline.X_train, pipeline.X_test)
+    
+    # Perform target drift detection
+    # detector.detect_target_drift(pipeline.X_train[:, -1], pipeline.X_test[:, -1])
+
+if __name__ == "__main__":
+    main()

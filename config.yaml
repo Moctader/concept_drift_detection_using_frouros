@@ -1,0 +1,27 @@
+pipeline:
+  stock_symbol: "AAPL"
+  split_ratio: 0.7
+  sequence_length: 50
+  lstm_model:
+    layers:
+      - LSTM:
+          units: 50
+          return_sequences: True
+          input_shape: [50, 1]
+      - LSTM:
+          units: 50
+          return_sequences: False
+      - Dense:
+          units: 1
+  train:
+    epochs: 10
+    batch_size: 32
+
+drift_detection:
+  warning_level: 1.0
+  drift_level: 2.0
+  min_num_instances: 25
+  feature_drift:
+    threshold: 0.05
+  target_drift:
+    threshold: 0.05
