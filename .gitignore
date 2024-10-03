@@ -1,0 +1,16 @@
+# Ignore Python bytecode files
+*.pyc
+__pycache__/
+
+# Ignore virtual environment directory
+env/
+venv/
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+
+
+
+#bfg --delete-files "largefile"
+#git reflog expire --expire=now --all && git gc --prune=now --aggressive
