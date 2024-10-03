@@ -25,9 +25,11 @@ class StockDataPipeline:
         stock_data = yf.download(self.stock_symbol)
         stock_data['Returns'] = stock_data['Close'].pct_change()  # Use return percentage as feature
         stock_data.dropna(inplace=True)
+        open_data = stock_data['Open'].values.reshape(-1, 1)
         
         # Use returns for modeling
         data = stock_data['Returns'].values.reshape(-1, 1)
+    
         
         # Scale the data
         data_scaled = self.scaler.fit_transform(data)
@@ -35,6 +37,8 @@ class StockDataPipeline:
         # Split into training (70%) and current (30%) data
         split_idx = int(len(data_scaled) * self.split_ratio)
         self.X_train, self.X_test = self._create_sequences(data_scaled[:split_idx]), self._create_sequences(data_scaled[split_idx:])
+        self.open_reference = open_data[split_idx:]
+        self.open_current = open_data[split_idx:]   
         
     def _create_sequences(self, data):
         """Create sequences of stock data for LSTM input."""
@@ -68,6 +72,7 @@ class ConceptDriftDetector:
         self.drift_detected = False
         self.drift_point = None
         self.target_drift_threshold = 0.05  
+        self.feature_drift_threshold = 0.05
         
     def detect_drift(self, y_true, y_pred):
         """Update the drift detector with new prediction errors."""
@@ -78,15 +83,15 @@ class ConceptDriftDetector:
             print("Concept drift detected!")
         return error
 
-    def detect_feature_drift(self, X_train, X_test):
+    def detect_feature_drift(self, open_reference, open_current):
         """Detect feature drift using KSTest."""
-        drift_flag = False
-        for i in range(X_train.shape[1]):
-            self.feature_drift_detector.fit(X_train[:, i])
-            drift_detected = self.feature_drift_detector.test(X_test[:, i])
-            if drift_detected and not drift_flag:
-                drift_flag = True
-                print(f"Feature {i} drift detected: {drift_detected}")
+        self.feature_drift_detector.fit(X=open_reference)
+        drift_detected = self.feature_drift_detector.compare(X=open_current)[0]
+        if drift_detected.p_value < self.feature_drift_threshold:
+            print(f"Feature drift detected: {drift_detected}")
+        else:
+            print(f"No feature drift detected")
+
 
     def detect_target_drift(self, y_train, y_test):
         """Detect target drift using ChiSquareTest."""
@@ -180,7 +185,6 @@ class StreamProcessor:
 
 @hydra.main(version_base=None, config_path=".", config_name="config")
 def main(cfg: DictConfig):
-    print(OmegaConf.to_yaml(cfg))
     
     # Create and train the pipeline
     pipeline = StockDataPipeline(
@@ -207,6 +211,8 @@ def main(cfg: DictConfig):
     # Run the stream processor for drift detection
     stream_processor = StreamProcessor(pipeline, detector)
     stream_processor.run(X_current)
+    detector.detect_feature_drift(pipeline.open_reference, pipeline.open_current)
+
     
     # Perform feature drift detection
     # detector.detect_feature_drift(pipeline.X_train, pipeline.X_test)
