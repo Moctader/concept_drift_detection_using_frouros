@@ -5,6 +5,7 @@ from keras.models import Sequential
 from keras.layers import LSTM, Dense
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from frouros.detectors.concept_drift import DDM, DDMConfig
+import matplotlib.pyplot as plt
 
 class StockDataPipeline:
     def __init__(self, stock_symbol, split_ratio=0.7, sequence_length=50):
@@ -55,10 +56,11 @@ class StockDataPipeline:
         return self.model.predict(X)
 
 class ConceptDriftDetector:
-    def __init__(self, warning_level=2.0, drift_level=3.0, min_num_instances=25):
+    def __init__(self, warning_level=1.0, drift_level=2.0, min_num_instances=25):
         config = DDMConfig(warning_level=warning_level, drift_level=drift_level, min_num_instances=min_num_instances)
         self.detector = DDM(config=config)
         self.drift_detected = False
+        self.drift_point = None
         
     def detect_drift(self, y_true, y_pred):
         """Update the drift detector with new prediction errors."""
@@ -69,21 +71,23 @@ class ConceptDriftDetector:
             print("Concept drift detected!")
         return error
 
-    def stream_test(self, X_current, y_current, pipeline):
-        """Simulate data stream over X_current and y_current."""
+    def stream_test(self, X_current, pipeline):
+        """Simulate data stream over X_current."""
         drift_flag = False
         y_true_list = []
         y_pred_list = []
         
-        for i, (X, y) in enumerate(zip(X_current, y_current)):
+        for i, X in enumerate(X_current):
+            y_true = X[-1, 0]  # The true value is the last value in the sequence
             y_pred = pipeline.predict(X.reshape(1, -1, 1)).item()
-            y_true_list.append(y)
+            y_true_list.append(y_true)
             y_pred_list.append(y_pred)
-            error = float(1 - (y_pred == y))  # Ensure error is a float
-            self.detector.update(value=error)
+            error = mean_squared_error([y_true], [y_pred])  # Use mean_squared_error for error calculation
+            self.detector.update(value=error*40)
             status = self.detector.status
             if status["drift"] and not drift_flag:
                 drift_flag = True
+                self.drift_point = i
                 print(f"Concept drift detected at step {i}.")
         
         if not drift_flag:
@@ -97,15 +101,49 @@ class ConceptDriftDetector:
         print(f"Final Mean Squared Error (MSE): {mse:.4f}")
         print(f"Final Mean Absolute Error (MAE): {mae:.4f}")
         print(f"Final R^2 Score: {r2:.4f}")
+        
+        # Plot the results
+        # Plot the results
+        fig, axs = plt.subplots(3, 1, figsize=(14, 15))
+
+        # Plot true values
+        axs[0].plot(y_true_list, color='g', label='True Values', linewidth=2, marker='o', markersize=4, alpha=0.7)
+        axs[0].set_title('True Values', fontsize=16)
+        axs[0].set_xlabel('Time Step', fontsize=14)
+        axs[0].set_ylabel('Value', fontsize=14)
+        axs[0].grid(True)
+        axs[0].legend(fontsize=12)
+
+        # Plot predicted values
+        axs[1].plot(y_pred_list, color='y', label='Predicted Values', linewidth=2, marker='x', markersize=4, alpha=0.7)
+        axs[1].set_title('Predicted Values', fontsize=16)
+        axs[1].set_xlabel('Time Step', fontsize=14)
+        axs[1].set_ylabel('Value', fontsize=14)
+        axs[1].grid(True)
+        axs[1].legend(fontsize=12)
+
+        # Combined plot with drift point
+        axs[2].plot(y_true_list, color='g', label='True Values', linewidth=2, marker='o', markersize=4, alpha=0.7)
+        axs[2].plot(y_pred_list, color='y', label='Predicted Values', linewidth=2, marker='x', markersize=4, alpha=0.7)
+        if self.drift_point is not None:
+            axs[2].axvline(x=self.drift_point, color='r', linestyle='--', label='Concept Drift', linewidth=2, alpha=0.7)
+        axs[2].set_title('True vs Predicted Values with Concept Drift', fontsize=16)
+        axs[2].set_xlabel('Time Step', fontsize=14)
+        axs[2].set_ylabel('Value', fontsize=14)
+        axs[2].grid(True)
+        axs[2].legend(fontsize=12)
+
+        plt.tight_layout()
+        plt.show()
 
 class StreamProcessor:
     def __init__(self, pipeline, detector):
         self.pipeline = pipeline
         self.detector = detector
         
-    def run(self, X_current, y_current):
+    def run(self, X_current):
         """Run the stream test for concept drift detection."""
-        self.detector.stream_test(X_current, y_current, self.pipeline)
+        self.detector.stream_test(X_current, self.pipeline)
 
 # Example usage
 if __name__ == "__main__":
@@ -120,11 +158,7 @@ if __name__ == "__main__":
     
     # Get the current data
     X_current = pipeline.X_test
-    y_current = pipeline.X_test[:, -1]
-    
+        
     # Run the stream processor for drift detection
     stream_processor = StreamProcessor(pipeline, detector)
-    stream_processor.run(X_current, y_current)
-
-
-# Output:
+    stream_processor.run(X_current)
