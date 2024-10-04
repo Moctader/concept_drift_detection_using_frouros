@@ -6,6 +6,11 @@ This project implements a stock data pipeline using yfinance for data fetching, 
 ## Installation
 
   1. Clone the repository:
+       ```bash
+        git clone https://github.com/Moctader/concept_drift_detection_using_frouros.git
+        
+        cd
+
   2. Create a virtual environment and activate it
         ```bash
         python3 -m venv venv
