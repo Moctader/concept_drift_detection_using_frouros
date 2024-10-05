@@ -7,14 +7,16 @@ pipeline:
       - LSTM:
           units: 50
           return_sequences: True
+          input_shape: [50, 1]
       - LSTM:
           units: 50
           return_sequences: False
       - Dense:
           units: 1
-  train:
-    epochs: 10
-    batch_size: 32
+
+train:
+  epochs: 10
+  batch_size: 32
 
 drift_detection:
   warning_level: 1.0
