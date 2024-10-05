@@ -5,24 +5,30 @@ pipeline:
   lstm_model:
     layers:
       - LSTM:
-          units: 100
+          units: 50
+          activation: 'relu'
           return_sequences: True
           input_shape: [50, 1]
       - Dropout:
           rate: 0.2
-      - BatchNormalization: {}
       - LSTM:
-          units: 100
+          units: 60
+          activation: 'relu'
           return_sequences: True
       - Dropout:
-          rate: 0.2
-      - BatchNormalization: {}
+          rate: 0.3
       - LSTM:
-          units: 50
+          units: 80
+          activation: 'relu'
+          return_sequences: True
+      - Dropout:
+          rate: 0.4
+      - LSTM:
+          units: 120
+          activation: 'relu'
           return_sequences: False
       - Dropout:
-          rate: 0.2
-      - BatchNormalization: {}
+          rate: 0.5
       - Dense:
           units: 1
 

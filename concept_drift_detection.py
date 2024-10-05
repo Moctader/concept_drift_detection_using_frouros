@@ -6,25 +6,29 @@ import yfinance as yf
 import numpy as np
 import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.layers import Dense, Dropout, LSTM
+from tensorflow.keras.layers import Dense, Dropout, LSTM, BatchNormalization
 from tensorflow.keras.models import Sequential, save_model
 from frouros.detectors.concept_drift import DDM
 from frouros.detectors.data_drift import KSTest, ChiSquareTest
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import hydra
 from omegaconf import DictConfig
+from frouros.metrics import PrequentialError
+
+metric = PrequentialError(alpha=1.0)
 
 
 START = "2015-01-01"
 TODAY = date.today().strftime("%Y-%m-%d")
 
 class StockDataPipeline:
-    def __init__(self, stock_symbol, split_ratio=0.7, sequence_length=50):
+    def __init__(self, stock_symbol, split_ratio=0.7, sequence_length=50, lstm_config=None):
         self.stock_symbol = stock_symbol
         self.split_ratio = split_ratio
         self.sequence_length = sequence_length
         self.scaler = MinMaxScaler(feature_range=(0, 1))
         self.model = None
+        self.lstm_config = lstm_config
         
     def fetch_data(self):
         """Fetch stock data using yfinance and preprocess it."""
@@ -54,19 +58,17 @@ class StockDataPipeline:
         X = self.X_ref.reshape(self.X_ref.shape[0], self.X_ref.shape[1], 1)
         
         model = Sequential()
-        model.add(LSTM(units=50, activation='relu', return_sequences=True, input_shape=(X.shape[1], 1)))
-        model.add(Dropout(0.2))
-        
-        model.add(LSTM(units=60, activation='relu', return_sequences=True))
-        model.add(Dropout(0.3))
-        
-        model.add(LSTM(units=80, activation='relu', return_sequences=True))
-        model.add(Dropout(0.4))
-        
-        model.add(LSTM(units=120, activation='relu'))
-        model.add(Dropout(0.5))
-        
-        model.add(Dense(units=1))
+        for layer in self.lstm_config['layers']:
+            layer_type = list(layer.keys())[0]
+            layer_params = layer[layer_type]
+            if layer_type == 'LSTM':
+                model.add(LSTM(**layer_params))
+            elif layer_type == 'Dropout':
+                model.add(Dropout(**layer_params))
+            elif layer_type == 'BatchNormalization':
+                model.add(BatchNormalization(**layer_params))
+            elif layer_type == 'Dense':
+                model.add(Dense(**layer_params))
         
         model.compile(optimizer='adam', loss='mean_squared_error', metrics=['MAE'])
         
@@ -77,7 +79,6 @@ class StockDataPipeline:
 
     def predict(self, X):
         return self.model.predict(X)
-
 class ConceptDriftDetector:
     def __init__(self, warning_level=1.0, drift_level=2.0, min_num_instances=25, feature_drift_threshold=0.05, target_drift_threshold=0.05):
         self.detector = DDM()  
@@ -90,13 +91,6 @@ class ConceptDriftDetector:
         self.y_true_list = []  
         self.y_pred_list = []  
 
-    def detect_feature_drift(self, open_reference, open_current):
-        self.feature_drift_detector.fit(X=open_reference)
-        drift_detected = self.feature_drift_detector.compare(X=open_current)[0]
-        if drift_detected.p_value < self.feature_drift_threshold:
-            print(f"Feature drift detected: {drift_detected}")
-        else:
-            print(f"No feature drift detected")
 
     def detect_target_drift(self, y_train, y_test):
         y_train = np.array(y_train).flatten()  
@@ -114,12 +108,14 @@ class ConceptDriftDetector:
         self.y_true_list = []  # Reset y_true_list
         self.y_pred_list = []  # Reset y_pred_list
 
-        for i, X in enumerate(X_curr):
-            y_true = y_curr[i]  # The true value is the last value in the sequence
+        for i, (X, y) in enumerate(zip(X_curr, y_curr)):
+            y_true = y  # The true value is the last value in the sequence
             y_pred = pipeline.predict(X.reshape(1, -1, 1)).item()
             self.y_true_list.append(y_true)
             self.y_pred_list.append(y_pred)
-            error = mean_squared_error([y_true], [y_pred])  
+            #error = 1 - (y_pred == y_true)
+            error=mean_squared_error([y_true], [y_pred])
+            metric_error = metric(error_value=error)  
             self.detector.update(value=error * 90)
             status = self.detector.status
             if status["drift"] and not drift_flag:
@@ -129,8 +125,7 @@ class ConceptDriftDetector:
         
         if not drift_flag:
             print("No concept drift detected")
-
-        self.detect_target_drift(self.y_true_list, self.y_pred_list)
+        print(f"Final accuracy: {1 - metric_error:.4f}\n")
 
         # Calculate regression metrics
         mse = mean_squared_error(self.y_true_list, self.y_pred_list)
@@ -197,12 +192,31 @@ def main(cfg: DictConfig):
     pipeline = StockDataPipeline(
         stock_symbol=cfg.pipeline.stock_symbol,
         split_ratio=cfg.pipeline.split_ratio,
-        sequence_length=cfg.pipeline.sequence_length
+        sequence_length=cfg.pipeline.sequence_length,
+        lstm_config=cfg.pipeline.lstm_model
     )
 
     pipeline.fetch_data()
     pipeline.build_and_train_lstm()
-    pipeline.train(epochs=cfg.train.epochs, batch_size=cfg.train.batch_size, validation_split=cfg.train.validation_split, callbacks=[tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=3)])
+    pipeline.train(
+        epochs=cfg.train.epochs, 
+        batch_size=cfg.train.batch_size, 
+        validation_split=cfg.train.validation_split, 
+        callbacks=[
+            tf.keras.callbacks.EarlyStopping(
+                monitor=cfg.train.early_stopping.monitor, 
+                patience=cfg.train.early_stopping.patience, 
+                restore_best_weights=cfg.train.early_stopping.restore_best_weights
+            ),
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor=cfg.train.reduce_lr.monitor, 
+                factor=cfg.train.reduce_lr.factor, 
+                patience=cfg.train.reduce_lr.patience, 
+                min_lr=cfg.train.reduce_lr.min_lr
+            )
+        ]
+    )
+    
     # Create a drift detector
     detector = ConceptDriftDetector(
         warning_level=cfg.drift_detection.warning_level,
@@ -216,7 +230,7 @@ def main(cfg: DictConfig):
     stream_processor = StreamProcessor(pipeline, detector)
     metrics = stream_processor.run(pipeline.X_curr, pipeline.y_curr)    
 
-    detector.detect_feature_drift(pipeline.open_reference, pipeline.open_current)
+    detector.detect_target_drift(pipeline.y_ref, pipeline.y_curr)
     plot_results(detector.y_true_list, detector.y_pred_list, detector.drift_point)
 
     print("Metrics:", metrics)
