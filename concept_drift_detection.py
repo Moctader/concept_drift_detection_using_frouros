@@ -1,40 +1,46 @@
+import pandas as pd
+import datetime as dt
+from datetime import date
+import matplotlib.pyplot as plt
 import yfinance as yf
 import numpy as np
-from sklearn.preprocessing import StandardScaler
-from keras.models import Sequential
-from keras.layers import LSTM, Dense
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-import matplotlib.pyplot as plt
-import importlib
-import hydra
-from omegaconf import DictConfig
+import tensorflow as tf
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.layers import Dense, Dropout, LSTM
+from tensorflow.keras.models import Sequential, save_model
 from frouros.detectors.concept_drift import DDM
 from frouros.detectors.data_drift import KSTest, ChiSquareTest
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import hydra
+from omegaconf import DictConfig
+
+
+START = "2015-01-01"
+TODAY = date.today().strftime("%Y-%m-%d")
 
 class StockDataPipeline:
     def __init__(self, stock_symbol, split_ratio=0.7, sequence_length=50):
         self.stock_symbol = stock_symbol
         self.split_ratio = split_ratio
         self.sequence_length = sequence_length
-        self.scaler = StandardScaler()
+        self.scaler = MinMaxScaler(feature_range=(0, 1))
         self.model = None
         
     def fetch_data(self):
         """Fetch stock data using yfinance and preprocess it."""
-        stock_data = yf.download(self.stock_symbol)
-        stock_data['Returns'] = stock_data['Close'].pct_change()  # Use return percentage as feature
+        stock_data = yf.download(self.stock_symbol, START, TODAY)
         stock_data.dropna(inplace=True)
         open_data = stock_data['Open'].values.reshape(-1, 1)
-        data = stock_data['Returns'].values.reshape(-1, 1)
+        data = stock_data['Close'].values.reshape(-1, 1)
         data_scaled = self.scaler.fit_transform(data)
-        open_data = self.scaler.fit_transform(open_data)
+        open_data_scaled = self.scaler.fit_transform(open_data)  # Use transform instead of fit_transform
         
         # Split into training (70%) and current (30%) data
         split_idx = int(len(data_scaled) * self.split_ratio)
         self.X_ref, self.y_ref = self._create_sequences(data_scaled[:split_idx])
         self.X_curr, self.y_curr = self._create_sequences(data_scaled[split_idx:])
-        self.open_reference = open_data[:split_idx]
-        self.open_current = open_data[split_idx:]   
+        self.open_reference = open_data_scaled[:split_idx]
+        self.open_current = open_data_scaled[split_idx:]
         
     def _create_sequences(self, data):
         X = []
@@ -44,17 +50,31 @@ class StockDataPipeline:
             y.append(data[i, 0])  # Take the last column as y_true
         return np.array(X).reshape(-1, self.sequence_length, 1), np.array(y)
     
-    def build_lstm_model(self, layers):
-        self.model = Sequential()
-        for layer in layers:
-            layer_name, layer_params = list(layer.items())[0]
-            layer_class = getattr(importlib.import_module('keras.layers'), layer_name)
-            self.model.add(layer_class(**layer_params))
-        self.model.compile(optimizer='adam', loss='mean_squared_error')
-    
-    def train(self, epochs=10, batch_size=32):
-        self.model.fit(self.X_ref, self.y_ref, epochs=epochs, batch_size=batch_size)
+    def build_and_train_lstm(self):
+        X = self.X_ref.reshape(self.X_ref.shape[0], self.X_ref.shape[1], 1)
         
+        model = Sequential()
+        model.add(LSTM(units=50, activation='relu', return_sequences=True, input_shape=(X.shape[1], 1)))
+        model.add(Dropout(0.2))
+        
+        model.add(LSTM(units=60, activation='relu', return_sequences=True))
+        model.add(Dropout(0.3))
+        
+        model.add(LSTM(units=80, activation='relu', return_sequences=True))
+        model.add(Dropout(0.4))
+        
+        model.add(LSTM(units=120, activation='relu'))
+        model.add(Dropout(0.5))
+        
+        model.add(Dense(units=1))
+        
+        model.compile(optimizer='adam', loss='mean_squared_error', metrics=['MAE'])
+        
+        self.model = model
+
+    def train(self, epochs, batch_size, validation_split, callbacks):
+        self.model.fit(self.X_ref, self.y_ref, validation_split=validation_split, epochs=epochs, batch_size=batch_size, callbacks=callbacks)
+
     def predict(self, X):
         return self.model.predict(X)
 
@@ -100,7 +120,7 @@ class ConceptDriftDetector:
             self.y_true_list.append(y_true)
             self.y_pred_list.append(y_pred)
             error = mean_squared_error([y_true], [y_pred])  
-            self.detector.update(value=error)
+            self.detector.update(value=error * 90)
             status = self.detector.status
             if status["drift"] and not drift_flag:
                 drift_flag = True
@@ -132,10 +152,10 @@ class StreamProcessor:
         self.detector = detector
         
     def run(self, X_curr, y_curr):
-        """Run the stream test for concept drift detection."""
-        metrics = self.detector.stream_test(X_curr, y_curr, self.pipeline)
-        return metrics
+        return self.detector.stream_test(X_curr, y_curr, self.pipeline)
+    
 
+# Plot the results
 def plot_results(y_true_list, y_pred_list, drift_point):
     """Plot the true values, predicted values, and concept drift point."""
     fig, axs = plt.subplots(3, 1, figsize=(14, 15))
@@ -170,6 +190,7 @@ def plot_results(y_true_list, y_pred_list, drift_point):
     plt.tight_layout()
     plt.show()
 
+
 @hydra.main(version_base=None, config_path=".", config_name="config")
 def main(cfg: DictConfig):
     # Create and train the pipeline
@@ -178,10 +199,10 @@ def main(cfg: DictConfig):
         split_ratio=cfg.pipeline.split_ratio,
         sequence_length=cfg.pipeline.sequence_length
     )
+
     pipeline.fetch_data()
-    pipeline.build_lstm_model(cfg.pipeline.lstm_model.layers)
-    pipeline.train(epochs=cfg.train.epochs, batch_size=cfg.train.batch_size)
-    
+    pipeline.build_and_train_lstm()
+    pipeline.train(epochs=cfg.train.epochs, batch_size=cfg.train.batch_size, validation_split=cfg.train.validation_split, callbacks=[tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=3)])
     # Create a drift detector
     detector = ConceptDriftDetector(
         warning_level=cfg.drift_detection.warning_level,
@@ -193,12 +214,13 @@ def main(cfg: DictConfig):
         
     # Run the stream processor for drift detection
     stream_processor = StreamProcessor(pipeline, detector)
-    metrics = stream_processor.run(pipeline.X_curr, pipeline.y_curr)   
+    metrics = stream_processor.run(pipeline.X_curr, pipeline.y_curr)    
 
     detector.detect_feature_drift(pipeline.open_reference, pipeline.open_current)
     plot_results(detector.y_true_list, detector.y_pred_list, detector.drift_point)
 
     print("Metrics:", metrics)
+
 
 if __name__ == "__main__":
     main()

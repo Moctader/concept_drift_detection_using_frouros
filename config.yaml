@@ -5,18 +5,40 @@ pipeline:
   lstm_model:
     layers:
       - LSTM:
-          units: 50
+          units: 100
           return_sequences: True
           input_shape: [50, 1]
+      - Dropout:
+          rate: 0.2
+      - BatchNormalization: {}
+      - LSTM:
+          units: 100
+          return_sequences: True
+      - Dropout:
+          rate: 0.2
+      - BatchNormalization: {}
       - LSTM:
           units: 50
           return_sequences: False
+      - Dropout:
+          rate: 0.2
+      - BatchNormalization: {}
       - Dense:
           units: 1
 
 train:
-  epochs: 10
-  batch_size: 32
+  epochs: 50
+  batch_size: 64
+  validation_split: 0.2
+  early_stopping:
+    monitor: 'val_loss'
+    patience: 5
+    restore_best_weights: True
+  reduce_lr:
+    monitor: 'val_loss'
+    factor: 0.5
+    patience: 5
+    min_lr: 0.001
 
 drift_detection:
   warning_level: 1.0
