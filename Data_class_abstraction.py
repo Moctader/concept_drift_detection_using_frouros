@@ -83,25 +83,29 @@ class Concept_Drift_Metrics(BaseMetrics):
 @dataclass
 class Target_drift_Metircs(BaseMetrics):
     steps: List[int] = field(default_factory=list)
-    p_values: List[float] = field(default_factory=list) 
+    p_values: List[float] = field(default_factory=list)
+    drift_points: List[int] = field(default_factory=list)
 
     def update_metrics(
         self,
         step: int,
-        p_value: Optional[float] = None
+        p_value: Optional[float] = None,
+        drift_point: Optional[int] = None
     ):
+        self.steps.append(step)
         if p_value is not None:
             self.p_values.append(p_value)
             logger.info(f"Updated p_value: {p_value}")
-
-
+        if drift_point is not None:
+            self.drift_points.append(drift_point)
+            logger.info(f"Updated drift point: {drift_point}")
 
     def get_latest_metrics(self) -> dict:
         """Retrieve the most recent metrics."""
         latest_metrics = {
             'step': self.steps[-1] if self.steps else None,
             'p_value': self.p_values[-1] if self.p_values else None,
-            
+            'drift_point': self.drift_points[-1] if self.drift_points else None,
         }
         logger.info(f"Latest metrics: {latest_metrics}")
         return latest_metrics

@@ -151,14 +151,14 @@ class ConceptDriftDetector:
             self.Target_metrics.update_metrics(
                 step=len(self.Target_metrics.steps),
                 drift_point=len(self.Target_metrics.steps),
-                mae_error=drift_detected.p_value  # Assuming p_value is used as an error metric
+                p_value=drift_detected.p_value  
             )
         else:
             print(f"No target drift detected")
-            self.metrics.update_metrics(
+            self.Target_metrics.update_metrics(
                 step=len(self.Target_metrics.steps),
                 drift_point=None,
-                mae_error=drift_detected.p_value  # Assuming p_value is used as an error metric
+                p_value=drift_detected.p_value  
             )
 
 
@@ -174,6 +174,7 @@ class ConceptDriftDetector:
             y_pred = pipeline.predict(X.reshape(1, -1, 1)).item()
             self.y_true_list.append(y_true)
             self.y_pred_list.append(y_pred)
+        
             error = mean_squared_error([y_true], [y_pred])
             metric_error = metric(error_value=error)  
             self.detector.update(value=error * 90)
