@@ -37,4 +37,16 @@ def plot_results(y_true_list, y_pred_list, drift_point):
 
 
 
+
+
+def plot_target_drift(p_values):
+    plt.figure(figsize=(10, 6))
+    plt.plot(p_values, label='p-value')
+    # plt.axhline(target_drift_threshold, color='r', linestyle='--', label='Threshold')
+    # plt.xlabel('Steps')
+    plt.ylabel('p-value')
+    plt.title('Target Drift Detection')
+    plt.legend()
+    plt.show()
+
     
