@@ -6,7 +6,6 @@ Concept drift detection is a critical aspect of machine learning model monitorin
 
 '''
 
-
 from dataclasses import dataclass, field
 from typing import List, Optional
 import numpy as np
@@ -23,18 +22,19 @@ from frouros.metrics import PrequentialError
 from frouros.detectors.concept_drift import DDM, ADWIN, PageHinkley
 from tensorflow.keras.layers import Dense, Dropout, LSTM, BatchNormalization
 from tensorflow.keras.models import Sequential, save_model
+from tensorflow.keras.callbacks import ModelCheckpoint
 from frouros.metrics import PrequentialError
 from sklearn.metrics import precision_score, recall_score, f1_score
 from Data_class_abstraction import BaseMetrics, Concept_Drift_Metrics, Target_drift_Metircs, Profit_loss_Metrics
 from plotting import plot_results
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-
+import os
+from plotting import plot_results
 
 metric = PrequentialError(alpha=1.0)
 
 START = "2015-01-01"
 TODAY = date.today().strftime("%Y-%m-%d")
-
 
 import logging
 
@@ -120,10 +120,6 @@ class StockDataPipeline:
             logger.error(f"Error during prediction: {e}")
             raise
 
-
-
-
-
 class ConceptDriftDetector:
     def __init__(self, warning_level=1.0, drift_level=2.0, min_num_instances=25, feature_drift_threshold=0.05, target_drift_threshold=0.05):
         self.detector = PageHinkley()  
@@ -138,8 +134,12 @@ class ConceptDriftDetector:
         self.metrics = Concept_Drift_Metrics()
         self.Target_metrics = Target_drift_Metircs()
 
-   
-        
+        # Initialize config with necessary parameters
+        self.config = {
+            'alpha': 0.99,  # Example value, adjust as needed
+            'mean_error_rate': np.mean(self.y_true_list) if self.y_true_list else 0,
+            'delta': 0.005  # Example value, adjust as needed
+        }
 
     def detect_target_drift(self, y_train, y_test):
         y_train = np.array(y_train).flatten()  
@@ -161,52 +161,50 @@ class ConceptDriftDetector:
                 p_value=drift_detected.p_value  
             )
 
-
-
     def stream_test(self, X_curr, y_curr, pipeline):
         """Simulate data stream over current_data."""
         drift_flag = False
         self.y_true_list = []  
         self.y_pred_list = [] 
+        self.sum_ = 0.0
 
         for i, (X, y) in enumerate(zip(X_curr, y_curr)):
             y_true = y  
             y_pred = pipeline.predict(X.reshape(1, -1, 1)).item()
             self.y_true_list.append(y_true)
             self.y_pred_list.append(y_pred)
-        
-            error = mean_squared_error([y_true], [y_pred])
-            metric_error = metric(error_value=error)  
-            self.detector.update(value=error * 90)
+
+            error_rate = y_true - y_pred
+            self.sum_ = self.config['alpha'] * self.sum_ + (
+                error_rate - self.config['mean_error_rate'] - self.config['delta']
+            )
+            self.detector.update(value=error_rate * 90)
             status = self.detector.status
             if status["drift"] and not drift_flag:
                 drift_flag = True
                 self.drift_point = i  # Store drift point
                 print(f"Concept drift detected at step {i}.")
                 self.metrics.update_metrics(step=i, drift_point=i)
-        
+    
         if not drift_flag:
             print("No concept drift detected")
-        print(f"Final accuracy: {1 - metric_error:.4f}\n")
-
 
         mse = mean_squared_error(self.y_true_list, self.y_pred_list)
         mae = mean_absolute_error(self.y_true_list, self.y_pred_list)
 
-
         self.metrics.update_metrics(
             step=len(self.metrics.steps),
-            accuracy=1 - metric_error,
+            accuracy=None,
             mae_error=mae,
             precision=None,
             recall=None,
-            f1_score=None)
+            f1_score=None
+        )
         
         return self.metrics.get_latest_metrics()
     
 
 
-    
 class StreamProcessor:
     def __init__(self, pipeline, detector):
         self.pipeline = pipeline
@@ -214,11 +212,6 @@ class StreamProcessor:
         
     def run(self, X_curr, y_curr):
         return self.detector.stream_test(X_curr, y_curr, self.pipeline)
-    
-
-
-
-
 
 @hydra.main(version_base=None, config_path=".", config_name="config")
 def main(cfg: DictConfig):
@@ -232,6 +225,17 @@ def main(cfg: DictConfig):
 
     pipeline.fetch_data()
     pipeline.build_and_train_lstm()
+
+    # Define the ModelCheckpoint callback using config.yaml
+    model_checkpoint_cfg = cfg.train.model_checkpoint
+    best_model_checkpoint_callback = ModelCheckpoint(
+        filepath=model_checkpoint_cfg.filepath,
+        monitor=model_checkpoint_cfg.monitor,
+        save_best_only=model_checkpoint_cfg.save_best_only,
+        mode=model_checkpoint_cfg.mode,
+        verbose=model_checkpoint_cfg.verbose
+    )
+
     pipeline.train(
         epochs=cfg.train.epochs, 
         batch_size=cfg.train.batch_size, 
@@ -247,7 +251,8 @@ def main(cfg: DictConfig):
                 factor=cfg.train.reduce_lr.factor, 
                 patience=cfg.train.reduce_lr.patience, 
                 min_lr=cfg.train.reduce_lr.min_lr
-            )
+            ),
+            best_model_checkpoint_callback  # Add the ModelCheckpoint callback here
         ]
     )
     
@@ -262,11 +267,10 @@ def main(cfg: DictConfig):
         
     # Run the stream processor for drift detection
     stream_processor = StreamProcessor(pipeline, detector)
-    metrics = stream_processor.run(pipeline.X_curr, pipeline.y_curr)    
+    stream_processor.run(pipeline.X_curr, pipeline.y_curr)    
 
     detector.detect_target_drift(pipeline.y_ref, pipeline.y_curr)
     plot_results(detector.y_true_list, detector.y_pred_list, detector.drift_point)
-
 
 if __name__ == "__main__":
     main()
