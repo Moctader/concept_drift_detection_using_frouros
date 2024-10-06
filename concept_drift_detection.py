@@ -160,7 +160,7 @@ class ConceptDriftDetector:
                 drift_point=None,
                 p_value=drift_detected.p_value  
             )
-
+    ###  concept drift detection methods directly use model performance metrics (like error rate) to detect drift. DDM, Page-Hinkley Test
     def stream_test(self, X_curr, y_curr, pipeline):
         """Simulate data stream over current_data."""
         drift_flag = False
@@ -174,10 +174,8 @@ class ConceptDriftDetector:
             self.y_true_list.append(y_true)
             self.y_pred_list.append(y_pred)
 
-            error_rate = y_true - y_pred
-            self.sum_ = self.config['alpha'] * self.sum_ + (
-                error_rate - self.config['mean_error_rate'] - self.config['delta']
-            )
+            error_rate = mean_squared_error([y_true], [y_pred])
+         
             self.detector.update(value=error_rate * 90)
             status = self.detector.status
             if status["drift"] and not drift_flag:
@@ -191,6 +189,7 @@ class ConceptDriftDetector:
 
         mse = mean_squared_error(self.y_true_list, self.y_pred_list)
         mae = mean_absolute_error(self.y_true_list, self.y_pred_list)
+        r2 = r2_score(self.y_true_list, self.y_pred_list)
 
         self.metrics.update_metrics(
             step=len(self.metrics.steps),
