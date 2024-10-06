@@ -90,15 +90,15 @@ class Target_drift_Metircs(BaseMetrics):
         self,
         step: int,
         p_value: Optional[float] = None,
-        drift_point: Optional[int] = None
+        target_drift_point: Optional[int] = None
     ):
         self.steps.append(step)
         if p_value is not None:
             self.p_values.append(p_value)
             logger.info(f"Updated p_value: {p_value}")
-        if drift_point is not None:
-            self.drift_points.append(drift_point)
-            logger.info(f"Updated drift point: {drift_point}")
+        if target_drift_point is not None:
+            self.drift_points.append(target_drift_point)
+            logger.info(f"Updated drift point: {target_drift_point}")
 
     def get_latest_metrics(self) -> dict:
         """Retrieve the most recent metrics."""

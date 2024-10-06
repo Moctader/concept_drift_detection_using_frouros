@@ -45,7 +45,8 @@ This project implements a stock data pipeline using yfinance for data fetching, 
 
     - Plot the true values, predicted values, and concept drift point using the `plot_results` function.
 
-    ![d](images/drift.png)
+    ![d_t](images/drift.png)
+    ![d_k](images/distribution.png)
 
 
 

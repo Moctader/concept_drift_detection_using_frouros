@@ -17,7 +17,7 @@ from omegaconf import DictConfig
 import hydra
 from datetime import date
 import matplotlib.pyplot as plt
-from frouros.detectors.data_drift import KSTest, ChiSquareTest
+from frouros.detectors.data_drift import KSTest, ChiSquareTest, PSI
 from frouros.metrics import PrequentialError
 from frouros.detectors.concept_drift import DDM, ADWIN, PageHinkley
 from tensorflow.keras.layers import Dense, Dropout, LSTM, BatchNormalization
@@ -29,7 +29,9 @@ from Data_class_abstraction import BaseMetrics, Concept_Drift_Metrics, Target_dr
 from plotting import plot_results
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import os
-from plotting import plot_results
+from plotting import plot_results, plot_target_drift
+from frouros.detectors.data_drift import IncrementalKSTest
+
 
 metric = PrequentialError(alpha=1.0)
 
@@ -56,17 +58,15 @@ class StockDataPipeline:
         try:
             stock_data = yf.download(self.stock_symbol, START, TODAY)
             stock_data.dropna(inplace=True)
-            open_data = stock_data['Open'].values.reshape(-1, 1)
             data = stock_data['Close'].values.reshape(-1, 1)
             data_scaled = self.scaler.fit_transform(data)
-            open_data_scaled = self.scaler.fit_transform(open_data)  # Use transform instead of fit_transform
             
             # Split into training (70%) and current (30%) data
             split_idx = int(len(data_scaled) * self.split_ratio)
             self.X_ref, self.y_ref = self._create_sequences(data_scaled[:split_idx])
             self.X_curr, self.y_curr = self._create_sequences(data_scaled[split_idx:])
-            self.open_reference = open_data_scaled[:split_idx]
-            self.open_current = open_data_scaled[split_idx:]
+            self.reference = data_scaled[:split_idx]
+            self.current = data_scaled[split_idx:]
             logger.info("Data fetched and preprocessed successfully.")
         except Exception as e:
             logger.error(f"Error fetching data: {e}")
@@ -123,16 +123,19 @@ class StockDataPipeline:
 class ConceptDriftDetector:
     def __init__(self, warning_level=1.0, drift_level=2.0, min_num_instances=25, feature_drift_threshold=0.05, target_drift_threshold=0.05):
         self.detector = PageHinkley()  
-        self.feature_drift_detector = KSTest()  
-        self.target_drift_detector = ChiSquareTest() 
+        self.target_drift_detector = KSTest()  # Initialize Incremental KS test detector
         self.drift_detected = False
         self.drift_point = None  
+        self.target_drift_point = None  
         self.target_drift_threshold = target_drift_threshold  
         self.feature_drift_threshold = feature_drift_threshold
         self.y_true_list = []  
         self.y_pred_list = []  
         self.metrics = Concept_Drift_Metrics()
         self.Target_metrics = Target_drift_Metircs()
+        self.p_values = []  # Store p-values for plotting
+        self.steps = []  
+        self.window_size = 60
 
         # Initialize config with necessary parameters
         self.config = {
@@ -141,25 +144,60 @@ class ConceptDriftDetector:
             'delta': 0.005  # Example value, adjust as needed
         }
 
-    def detect_target_drift(self, y_train, y_test):
-        y_train = np.array(y_train).flatten()  
-        y_test = np.array(y_test).flatten()  
-        self.target_drift_detector.fit(X=y_train)
-        drift_detected = self.target_drift_detector.compare(X=y_test)[0]
-        if drift_detected.p_value < self.target_drift_threshold:
-            print(f"Target drift detected: {drift_detected}")
+    def detect_target_drift(self, reference, current):
+        reference = np.array(reference).flatten()
+        current = np.array(current).flatten()
+
+        # Extract the last portion of the reference data equivalent to the length of the current data
+        reference_equivalent = reference[-len(current):]
+
+        # Perform KS test between the reference_equivalent and current data
+        self.target_drift_detector.fit(X=reference_equivalent)
+        test, _ = self.target_drift_detector.compare(current)
+
+        self.p_values.append(test.p_value)  # Store p-value for plotting
+        self.steps.append(len(current) // self.window_size)  # Store step for plotting
+
+        if test.p_value < self.target_drift_threshold:
+            print(f"Target drift detected: p-value = {test.p_value:.4f}")
+            self.target_drift_point = len(current)  # Store drift point
             self.Target_metrics.update_metrics(
                 step=len(self.Target_metrics.steps),
-                drift_point=len(self.Target_metrics.steps),
-                p_value=drift_detected.p_value  
+                target_drift_point=len(self.Target_metrics.steps),
+                p_value=test.p_value
             )
         else:
-            print(f"No target drift detected")
+            print(f"No target drift detected: p-value = {test.p_value:.4f}")
             self.Target_metrics.update_metrics(
                 step=len(self.Target_metrics.steps),
-                drift_point=None,
-                p_value=drift_detected.p_value  
+                target_drift_point=None,
+                p_value=test.p_value
             )
+
+        # Plot the distributions of reference and current
+        self.plot_distributions(reference_equivalent, current)
+
+    def plot_distributions(self, reference, current):
+        # Scale the data to the same range
+        scaler = MinMaxScaler()
+        reference_scaled = scaler.fit_transform(reference.reshape(-1, 1)).flatten()
+        current_scaled = scaler.transform(current.reshape(-1, 1)).flatten()
+
+        plt.figure(figsize=(10, 6), dpi=100)
+
+        # Plot histograms of reference and current data
+        plt.hist(reference_scaled, bins=30, alpha=0.5, label="Reference Data", color="blue", edgecolor='black')
+        plt.hist(current_scaled, bins=30, alpha=0.5, label="Current Data", color="green", edgecolor='black')
+
+        plt.title("Histogram of Scaled Data")
+        plt.xlabel("Scaled Value")
+        plt.ylabel("Frequency")
+        plt.legend()
+
+        plt.show()
+
+    
+
     ###  concept drift detection methods directly use model performance metrics (like error rate) to detect drift. DDM, Page-Hinkley Test
     def stream_test(self, X_curr, y_curr, pipeline):
         """Simulate data stream over current_data."""
@@ -268,7 +306,7 @@ def main(cfg: DictConfig):
     stream_processor = StreamProcessor(pipeline, detector)
     stream_processor.run(pipeline.X_curr, pipeline.y_curr)    
 
-    detector.detect_target_drift(pipeline.y_ref, pipeline.y_curr)
+    detector.detect_target_drift(pipeline.reference, pipeline.current)
     plot_results(detector.y_true_list, detector.y_pred_list, detector.drift_point)
 
 if __name__ == "__main__":
