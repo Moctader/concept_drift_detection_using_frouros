@@ -1,7 +1,7 @@
 '''
 Concept drift detection is a critical aspect of machine learning model monitoring and maintenance.
 1. observe drift metrics over time
-2. understand model accuracy decay
+2. Understand model accuracy decay
 3. identify a clear point when the model should be retrained based on performance degradation due to concept or data drift
 
 '''
@@ -26,9 +26,11 @@ from tensorflow.keras.models import Sequential, save_model
 from frouros.metrics import PrequentialError
 from sklearn.metrics import precision_score, recall_score, f1_score
 from Data_class_abstraction import BaseMetrics, Concept_Drift_Metrics, Target_drift_Metircs, Profit_loss_Metrics
-metric = PrequentialError(alpha=1.0)
 from plotting import plot_results
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
+
+metric = PrequentialError(alpha=1.0)
 
 START = "2015-01-01"
 TODAY = date.today().strftime("%Y-%m-%d")
@@ -134,9 +136,11 @@ class ConceptDriftDetector:
         self.y_true_list = []  
         self.y_pred_list = []  
         self.metrics = Concept_Drift_Metrics()
+        self.Target_metrics = Target_drift_Metircs()
 
    
         
+
     def detect_target_drift(self, y_train, y_test):
         y_train = np.array(y_train).flatten()  
         y_test = np.array(y_test).flatten()  
@@ -144,8 +148,18 @@ class ConceptDriftDetector:
         drift_detected = self.target_drift_detector.compare(X=y_test)[0]
         if drift_detected.p_value < self.target_drift_threshold:
             print(f"Target drift detected: {drift_detected}")
+            self.Target_metrics.update_metrics(
+                step=len(self.Target_metrics.steps),
+                drift_point=len(self.Target_metrics.steps),
+                mae_error=drift_detected.p_value  # Assuming p_value is used as an error metric
+            )
         else:
             print(f"No target drift detected")
+            self.metrics.update_metrics(
+                step=len(self.Target_metrics.steps),
+                drift_point=None,
+                mae_error=drift_detected.p_value  # Assuming p_value is used as an error metric
+            )
 
 
 
@@ -156,7 +170,7 @@ class ConceptDriftDetector:
         self.y_pred_list = [] 
 
         for i, (X, y) in enumerate(zip(X_curr, y_curr)):
-            y_true = y  # The true value is the last value in the sequence
+            y_true = y  
             y_pred = pipeline.predict(X.reshape(1, -1, 1)).item()
             self.y_true_list.append(y_true)
             self.y_pred_list.append(y_pred)
@@ -175,14 +189,14 @@ class ConceptDriftDetector:
         print(f"Final accuracy: {1 - metric_error:.4f}\n")
 
 
-        # Assuming self.y_true_list and self.y_pred_list are populated with true and predicted values
-        # precision = precision_score(self.y_true_list, self.y_pred_list, average='binary')
-        # recall = recall_score(self.y_true_list, self.y_pred_list, average='binary')
-        # f1 = f1_score(self.y_true_list, self.y_pred_list, average='binary')
+        mse = mean_squared_error(self.y_true_list, self.y_pred_list)
+        mae = mean_absolute_error(self.y_true_list, self.y_pred_list)
+
 
         self.metrics.update_metrics(
             step=len(self.metrics.steps),
             accuracy=1 - metric_error,
+            mae_error=mae,
             precision=None,
             recall=None,
             f1_score=None)
@@ -252,8 +266,6 @@ def main(cfg: DictConfig):
     detector.detect_target_drift(pipeline.y_ref, pipeline.y_curr)
     plot_results(detector.y_true_list, detector.y_pred_list, detector.drift_point)
 
-    print("Latest Metrics:", metrics)
-    print("Metrics Summary:", detector.metrics.metrics_summary())
 
 if __name__ == "__main__":
     main()

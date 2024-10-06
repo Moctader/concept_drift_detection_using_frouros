@@ -30,6 +30,7 @@ class Concept_Drift_Metrics(BaseMetrics):
     recalls: List[float] = field(default_factory=list)
     f1_scores: List[float] = field(default_factory=list)
     drift_points: List[int] = field(default_factory=list)
+    mae_errors: List[float] = field(default_factory=list)
 
 
     def update_metrics(
@@ -40,6 +41,7 @@ class Concept_Drift_Metrics(BaseMetrics):
         recall: Optional[float] = None,
         f1_score: Optional[float] = None,
         drift_point: Optional[int] = None,
+        mae_error: Optional[float] = None
         
     ):
         self.steps.append(step)
@@ -58,6 +60,9 @@ class Concept_Drift_Metrics(BaseMetrics):
         if drift_point is not None:
             self.drift_points.append(drift_point)
             logger.info(f"Updated drift point: {drift_point}")
+        if mae_error is not None:
+            self.mae_errors.append(mae_error)
+            logger.info(f"Updated MAE error: {mae_error}")
 
 
 
@@ -77,16 +82,26 @@ class Concept_Drift_Metrics(BaseMetrics):
 
 @dataclass
 class Target_drift_Metircs(BaseMetrics):
-    p_values: List[float] = field(default_factory=list)
+    steps: List[int] = field(default_factory=list)
+    p_values: List[float] = field(default_factory=list) 
 
-    def update_metrics(self, p_value: float):
-        self.p_values.append(p_value)
-        logger.info(f"Updated p-value: {p_value}")
+    def update_metrics(
+        self,
+        step: int,
+        p_value: Optional[float] = None
+    ):
+        if p_value is not None:
+            self.p_values.append(p_value)
+            logger.info(f"Updated p_value: {p_value}")
+
+
 
     def get_latest_metrics(self) -> dict:
         """Retrieve the most recent metrics."""
         latest_metrics = {
+            'step': self.steps[-1] if self.steps else None,
             'p_value': self.p_values[-1] if self.p_values else None,
+            
         }
         logger.info(f"Latest metrics: {latest_metrics}")
         return latest_metrics
