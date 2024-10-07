@@ -25,15 +25,11 @@ from statsmodels.tsa.seasonal import seasonal_decompose
 stock_ticker = "AAPL"
 start_date = "2020-01-01"
 end_date = "2023-01-01"
-
-# Fetch stock data using yfinance
 stock_data = yf.download(stock_ticker, start=start_date, end=end_date)
 
-# Calculate the rolling mean
+# Method 1: Calculate the rolling mean
 window_size = 30
 rolling_mean = stock_data['Close'].rolling(window=window_size).mean()
-
-# Plot the original stock data
 plt.figure(figsize=(12, 6))
 plt.plot(stock_data.index, stock_data['Close'], label='Original Close Price', color='blue', alpha=0.5)
 plt.plot(rolling_mean.index, rolling_mean, label=f'{window_size}-Day Rolling Mean', color='orange')
@@ -44,21 +40,22 @@ plt.ylabel('Price')
 plt.legend()
 plt.show()
 
-# Step 3: Detrend the data using differencing
-detrended_data = stock_data['Close'].diff().dropna()
 
-# Step 4: Split data into reference (old) and current data
+
+
+
+# Method 2 : Detrend the data using differencing
+detrended_data = stock_data['Close'].diff().dropna()
 split_date = "2022-01-01"
 reference_data = detrended_data[:split_date]
 current_data = detrended_data[split_date:]
 
-# Step 5: Use the KS test on the detrended data to detect drift
+#  Use the KS test on the detrended data to detect drift
 ks_stat, ks_p_value = ks_2samp(reference_data, current_data)
 
 print(f"KS Statistic (detrended): {ks_stat}")
 print(f"KS p-value (detrended): {ks_p_value}")
 
-# Step 6: Visualize the detrended data
 plt.figure(figsize=(10, 6))
 plt.plot(detrended_data.index, detrended_data, label='Detrended Close Price')
 plt.axvline(pd.to_datetime(split_date), color='r', linestyle='--', label='Split Date')
@@ -68,13 +65,16 @@ plt.ylabel('Detrended Close Price')
 plt.legend()
 plt.show()
 
-# Step 7: Check if drift detected in detrended data
 if ks_p_value < 0.05:
     print("Data drift detected in detrended data.")
 else:
     print("No significant data drift detected in detrended data.")
 
-# Decompose the stock data into trend, seasonal, and residual
+
+
+
+
+# Method 3: Decompose the stock data into trend, seasonal, and residual components
 decomposition = seasonal_decompose(stock_data['Close'], model='additive', period=30)
 trend = decomposition.trend.dropna()
 residual = decomposition.resid.dropna()
@@ -98,3 +98,10 @@ plt.xlabel('Date')
 plt.ylabel('Residuals')
 plt.legend()
 plt.show()
+
+
+
+if ks_p_value < 0.05:
+    print("Data drift detected in detrended data.")
+else:
+    print("No significant data drift detected in detrended data.")
