@@ -10,7 +10,7 @@ outputs/
 .ipynb_checkpoints
 
 
-
+/EODHD_EURUSD_HISTORICAL_2019_2024_1min.csv/
 
 #bfg --delete-files "largefile"
 #git reflog expire --expire=now --all && git gc --prune=now --aggressive
