@@ -1,74 +1,100 @@
-import yfinance as yf
-import numpy as np
+
+'''
+When detecting data drift in stock market data, trends pose a challenge because they represent natural, systematic changes over time. Without accounting for these trends, drift detection methods may falsely identify drift even when the changes are part of an ongoing trend. To handle trends while checking for data drift, you need to detrend the data or use methods that are robust to trends.
+
+Here’s how you can account for trends in stock market data when checking for data drift:
+
+Approaches to Handling Trends in Data Drift Detection
+1. Detrending the Data
+Remove the trend from the data before applying drift detection methods. This ensures that you're only checking for changes in the residuals (i.e., deviations from the trend) rather than the trend itself.
+Methods for Detrending:
+Differencing: A common technique in time series analysis where you subtract the previous time step from the current time step to remove trends.
+Moving Average: Apply a moving average to smooth out the trend and detect drift in deviations from the moving average.
+Linear Regression Detrending: Fit a linear (or polynomial) regression line to the data and subtract the trend line from the original data to obtain the detrended data.
+
+
+'''
+
 import matplotlib.pyplot as plt
+import pandas as pd
 from scipy.stats import ks_2samp
-from sklearn.preprocessing import MinMaxScaler
+import yfinance as yf
+from statsmodels.tsa.seasonal import seasonal_decompose
+
+# Define stock ticker and date range
+stock_ticker = "AAPL"
+start_date = "2020-01-01"
+end_date = "2023-01-01"
 
 # Fetch stock data using yfinance
-def fetch_stock_data(ticker, start, end):
-    stock_data = yf.download(ticker, start=start, end=end)
-    return stock_data['Close']
+stock_data = yf.download(stock_ticker, start=start_date, end=end_date)
 
-# Define stock symbol and date ranges
-ticker = 'AAPL'
-reference_start = '2020-01-01'
-reference_end = '2020-12-31'
-current_start = '2023-01-01'
-current_end = '2023-12-31'
+# Calculate the rolling mean
+window_size = 30
+rolling_mean = stock_data['Close'].rolling(window=window_size).mean()
 
-# Fetch stock data
-reference_data = fetch_stock_data(ticker, reference_start, reference_end)
-current_data = fetch_stock_data(ticker, current_start, current_end)
+# Plot the original stock data
+plt.figure(figsize=(12, 6))
+plt.plot(stock_data.index, stock_data['Close'], label='Original Close Price', color='blue', alpha=0.5)
+plt.plot(rolling_mean.index, rolling_mean, label=f'{window_size}-Day Rolling Mean', color='orange')
+plt.axvline(pd.to_datetime("2022-01-01"), color='red', linestyle='--', label='Split Date')
+plt.title(f'{stock_ticker} - Close Price and {window_size}-Day Rolling Mean')
+plt.xlabel('Date')
+plt.ylabel('Price')
+plt.legend()
+plt.show()
 
-# Drop missing values
-reference_data = reference_data.dropna()
-current_data = current_data.dropna()
+# Step 3: Detrend the data using differencing
+detrended_data = stock_data['Close'].diff().dropna()
 
-# Perform KS test to check for drift
-def ks_test(reference_data, current_data):
-    statistic, p_value = ks_2samp(reference_data, current_data)
-    return {
-        "statistic": statistic,
-        "p_value": p_value
-    }
+# Step 4: Split data into reference (old) and current data
+split_date = "2022-01-01"
+reference_data = detrended_data[:split_date]
+current_data = detrended_data[split_date:]
 
-# Run the KS test
-alpha = 0.05  # Significance level
-ks_test_result = ks_test(reference_data, current_data)
+# Step 5: Use the KS test on the detrended data to detect drift
+ks_stat, ks_p_value = ks_2samp(reference_data, current_data)
 
-# Visualization
-def plot_histograms(reference_data, current_data, ks_test_result, alpha=0.05):
-    # Scale the data to the same range
-    scaler = MinMaxScaler()
-    reference_data_scaled = scaler.fit_transform(reference_data.values.reshape(-1, 1)).flatten()
-    current_data_scaled = scaler.transform(current_data.values.reshape(-1, 1)).flatten()
+print(f"KS Statistic (detrended): {ks_stat}")
+print(f"KS p-value (detrended): {ks_p_value}")
 
-    fig, ax = plt.subplots(figsize=(10, 6), dpi=100)  # Adjusted figure size and DPI
+# Step 6: Visualize the detrended data
+plt.figure(figsize=(10, 6))
+plt.plot(detrended_data.index, detrended_data, label='Detrended Close Price')
+plt.axvline(pd.to_datetime(split_date), color='r', linestyle='--', label='Split Date')
+plt.title(f'{stock_ticker} Detrended Stock Price with Data Split')
+plt.xlabel('Date')
+plt.ylabel('Detrended Close Price')
+plt.legend()
+plt.show()
 
-    # Plot histograms of reference and current data
-    ax.hist(reference_data_scaled, bins=30, alpha=0.5, label="Reference Data", color="blue", edgecolor='black')
-    ax.hist(current_data_scaled, bins=30, alpha=0.5, label="Current Data", color="green", edgecolor='black')
+# Step 7: Check if drift detected in detrended data
+if ks_p_value < 0.05:
+    print("Data drift detected in detrended data.")
+else:
+    print("No significant data drift detected in detrended data.")
 
-    # KS statistic and p-value
-    statistic = ks_test_result["statistic"]
-    p_value = ks_test_result["p_value"]
+# Decompose the stock data into trend, seasonal, and residual
+decomposition = seasonal_decompose(stock_data['Close'], model='additive', period=30)
+trend = decomposition.trend.dropna()
+residual = decomposition.resid.dropna()
 
-    # Drift decision
-    drift = p_value <= alpha
-    drift_str = (
-        f"Drift detected\np-value = {p_value:.4f}"
-        if drift
-        else f"No drift detected\np-value = {p_value:.4f}"
-    )
-    ax.text(0.7, 0.875, drift_str, transform=ax.transAxes, fontsize=10, bbox={
-        "boxstyle": "round", "facecolor": "red" if drift else "green", "alpha": 0.5,
-    })
+# Use the residual component for drift detection
+reference_residual = residual[:split_date]
+current_residual = residual[split_date:]
 
-    ax.legend()
-    ax.set_title("Histogram of Scaled Stock Data with KS Test Results")
-    ax.set_xlabel("Scaled Stock Price")
-    ax.set_ylabel("Frequency")
-    plt.show()
+# KS test on residuals
+ks_stat, ks_p_value = ks_2samp(reference_residual, current_residual)
 
-# Plot the histograms with KS test results
-plot_histograms(reference_data, current_data, ks_test_result, alpha=alpha)
+print(f"KS Statistic (residual): {ks_stat}")
+print(f"KS p-value (residual): {ks_p_value}")
+
+# Visualize residuals
+plt.figure(figsize=(10, 6))
+plt.plot(residual.index, residual, label='Residuals')
+plt.axvline(pd.to_datetime(split_date), color='r', linestyle='--', label='Split Date')
+plt.title(f'{stock_ticker} Residuals with Data Split')
+plt.xlabel('Date')
+plt.ylabel('Residuals')
+plt.legend()
+plt.show()

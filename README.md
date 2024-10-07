@@ -38,7 +38,6 @@ This project implements a stock data pipeline using yfinance for data fetching, 
 
     - Create an instance of `StreamProcessor` with the pipeline and detector.
     - Run the stream test for concept drift detection on the current data.
-    - Detect feature drift using the `detect_feature_drift` method.
     - Detect target drift using the `detect_target_drift` method.
 
 4. **Plot the Results**:
