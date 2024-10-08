@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import ks_2samp
+from frouros.detectors.data_drift import KSTest
 
 # Read the CSV file into a DataFrame
 data = pd.read_csv('EODHD_EURUSD_HISTORICAL_2019_2024_1min.csv')
@@ -26,17 +26,25 @@ ks_p_values = []
 # Create a figure for subplots
 fig, axes = plt.subplots(len(chunks) - 1, 1, figsize=(12, 6 * (len(chunks) - 1)))
 
+# Create an instance of KSTest
+ks_test = KSTest()
+
 # Perform the KS test between consecutive chunks and plot
 for i in range(len(chunks) - 1):
-    ks_stat, ks_p_value = ks_2samp(chunks[i], chunks[i + 1])
+    # Fit the KS test on the first chunk
+    ks_test.fit(chunks[i].values.reshape(-1, 1))
+    
+    # Compare the next chunk with the fitted KS test
+    ks_result, _ = ks_test.compare(chunks[i + 1].values.reshape(-1, 1))
+    ks_stat = ks_result.statistic[0]
+    ks_p_value = ks_result.p_value[0]
+    
     ks_stats.append(ks_stat)
     ks_p_values.append(ks_p_value)
     
     # Plot the chunks with KS p-value in the label of the first chunk
     axes[i].plot(chunks[i].index, chunks[i], label=f'Chunk {i+1}, p-value: {ks_p_value:.4f}', color='blue')
     axes[i].plot(chunks[i + 1].index, chunks[i + 1], label=f'Chunk {i+2}', color='orange')
-    axes[i].set_title(f'Comparison between Chunk {i+1} and Chunk {i+2}')
-    axes[i].set_xlabel('Index')
     axes[i].set_ylabel('Deviation')
     axes[i].legend()
     
